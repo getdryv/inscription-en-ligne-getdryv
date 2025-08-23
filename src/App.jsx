@@ -3,7 +3,8 @@ import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { loadStripe } from '@stripe/stripe-js';
 
 // --- Auth / Firebase
-import { auth } from './firebase';
+// src/App.jsx
+import { auth, db } from './firebase';
 import { loginWithGoogle } from './auth';
 import { getFirestore, collection, addDoc, serverTimestamp } from 'firebase/firestore';
 
@@ -240,7 +241,7 @@ export default function App() {
   // --------- Étape 1 handlers
 const saveLeadAndGo = async (lead) => {
   try {
-    console.log('→ Tentative d’enregistrement du lead :', lead);
+    console.log('~ Tentative d’enregistrement du lead :', lead);
 
     const ref = await addDoc(collection(db, 'leads'), {
       ...lead,
@@ -255,6 +256,7 @@ const saveLeadAndGo = async (lead) => {
 
   setStep(2);
 };
+
 
   const handleManualContinue = async () => {
     setLeadError('');
