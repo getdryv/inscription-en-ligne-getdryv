@@ -17,7 +17,7 @@ if (!PK) console.error('⚠️ VITE_STRIPE_PUBLISHABLE_KEY manquante dans le .en
 const stripePromise = PK ? loadStripe(PK) : Promise.resolve(null);
 
 // ✅ Base URL de l’API (front). Par défaut 4242 en local.
-const API = import.meta.env.VITE_API_URL || 'http://localhost:4242';
+const API = import.meta.env.VITE_API_BASE || '';
 
 // ------------------------------------------------------------------
 // OFFRES (tarifs + options)
