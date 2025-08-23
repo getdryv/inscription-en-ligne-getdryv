@@ -237,18 +237,24 @@ export default function App() {
   };
 
   // ---------- Étape 1 handlers
-  const saveLeadAndGo = async (lead) => {
-    try {
-      const db = getFirestore(auth.app);
-      await addDoc(collection(db, 'leads'), {
-        ...lead,
-        createdAt: serverTimestamp(),
-      });
-    } catch (e) {
-      console.warn('Lead non enregistré en Firestore :', e?.message || e);
-    }
-    setStep(2);
-  };
+  // --------- Étape 1 handlers
+const saveLeadAndGo = async (lead) => {
+  try {
+    console.log('→ Tentative d’enregistrement du lead :', lead);
+
+    const ref = await addDoc(collection(db, 'leads'), {
+      ...lead,
+      createdAt: serverTimestamp(),
+    });
+
+    console.log('✅ Lead enregistré avec succès, id =', ref.id);
+  } catch (e) {
+    console.error('❌ Lead non enregistré en Firestore :', e.code || e.message, e);
+    alert('Erreur Firestore: ' + (e.code || e.message));
+  }
+
+  setStep(2);
+};
 
   const handleManualContinue = async () => {
     setLeadError('');
