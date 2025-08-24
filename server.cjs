@@ -4,24 +4,22 @@ const express = require('express');
 const cors = require('cors');
 const https = require('https');
 const dns = require('dns');
-const dnsPromises = require('dns').promises;
+const { promises: dnsPromises } = require('dns');
 const Stripe = require('stripe');
 
 const app = express();
 app.set('trust proxy', 1);
 
-// --- CONFIG ---
+// ---------- CONFIG ----------
 const FRONT = (process.env.FRONT_URL || 'https://inscription-en-ligne-getdryv-1.onrender.com').replace(/\/+$/, '');
 const PORT = process.env.PORT || 4242;
 const WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || null;
 
-// Favoriser IPv4 globalement (si Node < option env)
+// Forcer IPv4 (fiabilise la connexion à Stripe)
 if (dns.setDefaultResultOrder) dns.setDefaultResultOrder('ipv4first');
-
-// Agent HTTPS forcé IPv4 pour Stripe
 const agent = new https.Agent({
   keepAlive: true,
-  lookup: (hostname, options, cb) => require('dns').lookup(hostname, { family: 4 }, cb),
+  lookup: (host, _opts, cb) => dns.lookup(host, { family: 4 }, cb),
 });
 
 if (!process.env.STRIPE_SECRET_KEY) {
@@ -35,20 +33,18 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
   timeout: 20000,
 });
 
-// Helpers
-const baseUrl = (req) => `${req.headers['x-forwarded-proto'] || req.protocol}://${req.get('host')}`;
-const logStripeErr = (e, ctx) => {
-  console.error(`❌ ${ctx}:`, {
-    name: e.name, type: e.type, code: e.code, message: e.message,
-    errno: e.errno, syscall: e.syscall,
-    stack: e.stack?.split('\n').slice(0,2).join(' | ')
-  });
-};
+// ---------- CORS ----------
+app.use(cors({
+  origin: true,                      // autorise le domaine appelant
+  credentials: true,
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  maxAge: 86400,                     // cache du préflight
+}));
+// IMPORTANT : répondre aux préflights (OPTIONS) sur toutes les routes
+app.options('*', cors());
 
-// CORS
-app.use(cors());
-
-// Webhook AVANT body-parser
+// ---------- Webhook AVANT le JSON parser ----------
 app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), (req, res) => {
   let event = req.body;
   const sig = req.headers['stripe-signature'];
@@ -60,6 +56,7 @@ app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), (req, re
     console.error('Webhook signature error:', err.message);
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
+
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
     const cycles = Number(session.metadata?.cycles || 0);
@@ -76,13 +73,12 @@ app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), (req, re
   res.json({ received: true });
 });
 
-// Body parser JSON
+// JSON parser pour le reste
 app.use(express.json());
 
-// Health
+// ---------- DIAG / HEALTH ----------
 app.get('/api/health', (_req, res) => res.json({ ok: true, node: process.version, front: FRONT }));
 
-// Diag connectivité
 app.get('/api/_diag', async (_req, res) => {
   try {
     const resolves = await dnsPromises.lookup('api.stripe.com', { all: true });
@@ -90,7 +86,7 @@ app.get('/api/_diag', async (_req, res) => {
     const ping = (url) => new Promise((resolve) => {
       https.get(url, (r) => resolve({ status: r.statusCode, headers: r.headers }))
         .on('error', (e) => resolve({ error: e.message, code: e.code, syscall: e.syscall }))
-        .setTimeout(8000, function(){ this.destroy(new Error('Timeout')); });
+        .setTimeout(8000, function () { this.destroy(new Error('Timeout')); });
     });
     const g = await ping('https://www.google.com');
     const s = await ping('https://api.stripe.com/');
@@ -100,7 +96,7 @@ app.get('/api/_diag', async (_req, res) => {
   }
 });
 
-// --- CREATE CHECKOUT (1x) ---
+// ---------- CHECKOUT 1x ----------
 app.post('/api/create-checkout-session', async (req, res) => {
   try {
     const { offerId, mode, firstName = '', lastName = '', phone = '', promoCode = '' } = req.body;
@@ -119,28 +115,33 @@ app.post('/api/create-checkout-session', async (req, res) => {
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
       line_items: [{
-        price_data: { currency: 'eur', unit_amount: OFFERS[offerId].amount1x, product_data: { name: OFFERS[offerId].label } },
+        price_data: {
+          currency: 'eur',
+          unit_amount: offer.amount1x,
+          product_data: { name: OFFERS[offerId].label },
+        },
         quantity: 1,
       }],
       payment_method_types: ['card'],
       phone_number_collection: { enabled: true },
       allow_promotion_codes: true,
-      success_url: `${baseUrl(req)}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url:  `${baseUrl(req)}/?resume=checkout`,
+      success_url: `${req.protocol}://${req.get('host')}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url:  `${req.protocol}://${req.get('host')}/?resume=checkout`,
       metadata: { offerId, mode, firstName, lastName, phone, promoCode: (promoCode || '').trim() },
     });
 
     res.json({ id: session.id });
   } catch (e) {
-    logStripeErr(e, 'create-checkout-session');
+    console.error('❌ create-checkout-session:', e?.raw?.message || e.message);
     res.status(500).json({ error: e?.raw?.message || e.message || 'Erreur interne du serveur' });
   }
 });
 
-// --- INSTALLMENTS ---
+// ---------- INSTALLMENTS ----------
 app.post('/api/create-installments-session', async (req, res) => {
   try {
     const { offerId, cycles = 3, firstName = '', lastName = '', phone = '' } = req.body;
+
     const OFFERS = {
       'classique-10h': { label: 'Permis 10 heures', amountTotal:  69900 },
       'classique-20h': { label: 'Permis 20 heures', amountTotal: 109900 },
@@ -159,25 +160,30 @@ app.post('/api/create-installments-session', async (req, res) => {
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
       line_items: [{
-        price_data: { currency: 'eur', recurring: { interval: 'month' }, unit_amount: perCycle, product_data: { name: `${offer.label} — ${n}x` } },
+        price_data: {
+          currency: 'eur',
+          recurring: { interval: 'month' },
+          unit_amount: perCycle,
+          product_data: { name: `${OFFERS[offerId].label} — ${n}x` },
+        },
         quantity: 1,
       }],
       payment_method_types: ['card'],
       phone_number_collection: { enabled: true },
-      success_url: `${baseUrl(req)}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url:  `${baseUrl(req)}/?resume=checkout`,
+      success_url: `${req.protocol}://${req.get('host')}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url:  `${req.protocol}://${req.get('host')}/?resume=checkout`,
       subscription_data: { metadata: { offerId, cycles: n, firstName, lastName, phone } },
       metadata: { offerId, mode: `${n}x`, firstName, lastName, phone, cycles: n },
     });
 
     res.json({ id: session.id });
   } catch (e) {
-    logStripeErr(e, 'create-installments-session');
+    console.error('❌ create-installments-session:', e?.raw?.message || e.message);
     res.status(500).json({ error: e?.raw?.message || e.message || 'Erreur interne du serveur' });
   }
 });
 
-// --- START ---
+// ---------- START ----------
 app.listen(PORT, () => {
   console.log(`✅ API Stripe en écoute sur port ${PORT}`);
   if (!WEBHOOK_SECRET) console.log('ℹ️ STRIPE_WEBHOOK_SECRET non défini (OK en DEV)');
