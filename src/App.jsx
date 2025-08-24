@@ -388,7 +388,7 @@ export default function App() {
         {/* Étape 1 — Inscription (deux méthodes) */}
         {step === 1 && (
           <section className="space-y-6">
-            <h1 className="text-2xl font-bold text-center">Inscription</h1>
+            <h1 className="text-2xl font-bold text-center">Voir les offres</h1>
             <p className="text-gray-600 text-center">
               Deux façons d’accéder aux tarifs et passer au paiement : remplis le formulaire rapide
               <span className="hidden sm:inline">,</span> ou continue avec Google.
