@@ -3,7 +3,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const Stripe = require('stripe');
-const path = require('path'); // <-- nécessaire pour servir le front
+const path = require('path');
 
 const app = express();
 
@@ -35,14 +35,13 @@ app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), (req, re
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
     const cycles = Number(session.metadata?.cycles || 0);
-    if (session.mode === 'subscription' && session.subscription && [2,3,4].includes(cycles)) {
+    if (session.mode === 'subscription' && session.subscription && [2, 3, 4].includes(cycles)) {
       const end = new Date();
       end.setMonth(end.getMonth() + (cycles - 1));
-      stripe.subscriptions.update(session.subscription, {
-        cancel_at: Math.floor(end.getTime() / 1000),
-      }).then(() => {
-        console.log(`Subscription ${session.subscription} auto-cancel @ ${end.toISOString()}`);
-      }).catch(console.error);
+      stripe.subscriptions
+        .update(session.subscription, { cancel_at: Math.floor(end.getTime() / 1000) })
+        .then(() => console.log(`Subscription ${session.subscription} auto-cancel @ ${end.toISOString()}`))
+        .catch(console.error);
     }
   }
 
@@ -59,34 +58,34 @@ app.post('/api/create-checkout-session', async (req, res) => {
     const { offerId, mode, firstName = '', lastName = '', phone = '', promoCode = '' } = req.body;
 
     const OFFERS = {
-      "classique-10h": { label: "Permis 10 heures",       amount1x:  64900 },
-      "classique-20h": { label: "Permis 20 heures",       amount1x:  99900 },
-      "classique-30h": { label: "Permis 30 heures",       amount1x: 149900 },
-      "accelere-20h":  { label: "Accélérée 20 heures",    amount1x: 149900 },
-      "accelere-30h":  { label: "Accélérée 30 heures",    amount1x: 179900 },
+      'classique-10h': { label: 'Permis 10 heures', amount1x: 64900 },
+      'classique-20h': { label: 'Permis 20 heures', amount1x: 99900 },
+      'classique-30h': { label: 'Permis 30 heures', amount1x: 149900 },
+      'accelere-20h': { label: 'Accélérée 20 heures', amount1x: 149900 },
+      'accelere-30h': { label: 'Accélérée 30 heures', amount1x: 179900 },
     };
 
     const offer = OFFERS[offerId];
     if (!offer) return res.status(400).json({ error: 'Offre inconnue' });
     if (mode !== '1x') return res.status(400).json({ error: 'Utilise /api/create-installments-session pour le paiement en plusieurs fois' });
 
-    console.log('[1x] offerId=', offerId, 'amount1x=', offer.amount1x);
-
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
-      line_items: [{
-        price_data: {
-          currency: 'eur',
-          unit_amount: offer.amount1x,
-          product_data: { name: offer.label },
+      line_items: [
+        {
+          price_data: {
+            currency: 'eur',
+            unit_amount: offer.amount1x,
+            product_data: { name: offer.label },
+          },
+          quantity: 1,
         },
-        quantity: 1,
-      }],
+      ],
       payment_method_types: ['card'],
       phone_number_collection: { enabled: true },
       allow_promotion_codes: true,
       success_url: `${FRONT}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url:  `${FRONT}/?resume=checkout`,
+      cancel_url: `${FRONT}/?resume=checkout`,
       metadata: { offerId, mode, firstName, lastName, phone, promoCode: (promoCode || '').trim() },
     });
 
@@ -103,37 +102,38 @@ app.post('/api/create-installments-session', async (req, res) => {
     const { offerId, cycles = 3, firstName = '', lastName = '', phone = '' } = req.body;
 
     const OFFERS = {
-      "classique-10h": { label: "Permis 10 heures",       amountTotal:  69900 },
-      "classique-20h": { label: "Permis 20 heures",       amountTotal: 109900 },
-      "classique-30h": { label: "Permis 30 heures",       amountTotal: 164900 },
-      "accelere-20h":  { label: "Accélérée 20 heures",    amountTotal: 159900 },
-      "accelere-30h":  { label: "Accélérée 30 heures",    amountTotal: 189900 },
+      'classique-10h': { label: 'Permis 10 heures', amountTotal: 69900 },
+      'classique-20h': { label: 'Permis 20 heures', amountTotal: 109900 },
+      'classique-30h': { label: 'Permis 30 heures', amountTotal: 164900 },
+      'accelere-20h': { label: 'Accélérée 20 heures', amountTotal: 159900 },
+      'accelere-30h': { label: 'Accélérée 30 heures', amountTotal: 189900 },
     };
 
     const offer = OFFERS[offerId];
     if (!offer) return res.status(400).json({ error: 'Offre inconnue' });
 
     const n = Number(cycles);
-    if (![2,3,4].includes(n)) return res.status(400).json({ error: 'cycles doit être 2, 3 ou 4' });
+    if (![2, 3, 4].includes(n)) return res.status(400).json({ error: 'cycles doit être 2, 3 ou 4' });
 
     const perCycle = Math.floor(offer.amountTotal / n);
-    console.log('[nx] offerId=', offerId, 'cycles=', n, 'perCycle=', perCycle, 'total=', offer.amountTotal);
 
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
-      line_items: [{
-        price_data: {
-          currency: 'eur',
-          recurring: { interval: 'month' },
-          unit_amount: perCycle,
-          product_data: { name: `${offer.label} — ${n}x` },
+      line_items: [
+        {
+          price_data: {
+            currency: 'eur',
+            recurring: { interval: 'month' },
+            unit_amount: perCycle,
+            product_data: { name: `${offer.label} — ${n}x` },
+          },
+          quantity: 1,
         },
-        quantity: 1,
-      }],
+      ],
       payment_method_types: ['card'],
       phone_number_collection: { enabled: true },
       success_url: `${FRONT}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url:  `${FRONT}/?resume=checkout`,
+      cancel_url: `${FRONT}/?resume=checkout`,
       subscription_data: { metadata: { offerId, cycles: n, firstName, lastName, phone } },
       metadata: { offerId, mode: `${n}x`, firstName, lastName, phone, cycles: n },
     });
@@ -145,7 +145,7 @@ app.post('/api/create-installments-session', async (req, res) => {
   }
 });
 
-// --- (Optionnel) Récupérer une session pour afficher le reçu ---
+// --- (Optionnel) Récupérer une session
 app.get('/api/checkout-session/:id', async (req, res) => {
   try {
     const session = await stripe.checkout.sessions.retrieve(req.params.id, {
@@ -160,11 +160,11 @@ app.get('/api/checkout-session/:id', async (req, res) => {
 // === Servir le front buildé (Vite) ===
 app.use(express.static(path.join(__dirname, 'dist')));
 
-// (facultatif) éviter de petits 404 bruyants
+// (facultatif) éviter un petit 404 bruyant de favicon
 app.get('/favicon.ico', (_req, res) => res.status(204).end());
 
-// Catch-all SPA → index.html
-app.get('*', (_req, res) => {
+// Catch-all SPA → IMPORTANT: utiliser '/*' avec Express 5
+app.get('/*', (_req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
