@@ -15,11 +15,10 @@ const FRONT = (process.env.FRONT_URL || 'https://inscription-en-ligne-getdryv-1.
 const PORT = process.env.PORT || 4242;
 const WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || null;
 
-// 🔧 Réseau: privilégier IPv4 (évite les soucis IPv6 vers api.stripe.com)
+// 🔧 Réseau: privilégier IPv4 (évite soucis IPv6 → api.stripe.com)
 if (dns.setDefaultResultOrder) dns.setDefaultResultOrder('ipv4first');
 const agent = new https.Agent({
   keepAlive: true,
-  // forcer la résolution IPv4 pour toutes les requêtes Stripe
   lookup: (hostname, options, cb) => require('dns').lookup(hostname, { family: 4 }, cb),
 });
 
@@ -30,8 +29,8 @@ if (!process.env.STRIPE_SECRET_KEY) {
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
   apiVersion: '2024-06-20',
   httpClient: Stripe.createNodeHttpClient(agent),
-  maxNetworkRetries: 0,        // on laisse Stripe ne PAS réessayer pour voir l’erreur nette
-  timeout: 20000,              // 20s pour être verbeux dans les logs si ça coince
+  maxNetworkRetries: 0,   // pas d’auto-retry → log de l’erreur réelle
+  timeout: 20000,
 });
 
 // Helpers
@@ -40,7 +39,7 @@ const logStripeErr = (e, ctx) => {
   console.error(`❌ ${ctx}:`, {
     name: e.name, type: e.type, code: e.code, message: e.message,
     errno: e.errno, syscall: e.syscall,
-    stack: e.stack?.split('\n').slice(0, 2).join(' | ')
+    stack: e.stack?.split('\n').slice(0,2).join(' | ')
   });
 };
 
@@ -51,7 +50,6 @@ app.use(cors());
 app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), (req, res) => {
   let event = req.body;
   const sig = req.headers['stripe-signature'];
-
   try {
     event = WEBHOOK_SECRET
       ? stripe.webhooks.constructEvent(req.body, sig, WEBHOOK_SECRET)
@@ -81,10 +79,10 @@ app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), (req, re
 // Body parser JSON pour le reste
 app.use(express.json());
 
-// --- SANITY CHECK ---
+// --- SANITY ---
 app.get('/api/health', (_req, res) => res.json({ ok: true, node: process.version, front: FRONT }));
 
-// --- DIAG: tester la connectivité vers Stripe ---
+// --- DIAG connectivité ---
 app.get('/api/_diag', async (_req, res) => {
   try {
     const resolves = await dnsPromises.lookup('api.stripe.com', { all: true });
@@ -102,7 +100,7 @@ app.get('/api/_diag', async (_req, res) => {
   }
 });
 
-// --- CREATE CHECKOUT (1x) ---
+// --- CHECKOUT 1x ---
 app.post('/api/create-checkout-session', async (req, res) => {
   try {
     const { offerId, mode, firstName = '', lastName = '', phone = '', promoCode = '' } = req.body;
@@ -114,7 +112,6 @@ app.post('/api/create-checkout-session', async (req, res) => {
       'accelere-20h':  { label: 'Accélérée 20 heures', amount1x: 149900 },
       'accelere-30h':  { label: 'Accélérée 30 heures', amount1x: 179900 },
     };
-
     const offer = OFFERS[offerId];
     if (!offer) return res.status(400).json({ error: 'Offre inconnue' });
     if (mode !== '1x') return res.status(400).json({ error: 'Utilise /api/create-installments-session pour le paiement en plusieurs fois' });
@@ -136,10 +133,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
       allow_promotion_codes: true,
       success_url: `${baseUrl(req)}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url:  `${baseUrl(req)}/?resume=checkout`,
-      metadata: {
-        offerId, mode, firstName, lastName, phone,
-        promoCode: (promoCode || '').trim(),
-      },
+      metadata: { offerId, mode, firstName, lastName, phone, promoCode: (promoCode || '').trim() },
     });
 
     res.json({ id: session.id });
@@ -161,7 +155,6 @@ app.post('/api/create-installments-session', async (req, res) => {
       'accelere-20h':  { label: 'Accélérée 20 heures', amountTotal: 159900 },
       'accelere-30h':  { label: 'Accélérée 30 heures', amountTotal: 189900 },
     };
-
     const offer = OFFERS[offerId];
     if (!offer) return res.status(400).json({ error: 'Offre inconnue' });
 
@@ -186,9 +179,7 @@ app.post('/api/create-installments-session', async (req, res) => {
       phone_number_collection: { enabled: true },
       success_url: `${baseUrl(req)}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url:  `${baseUrl(req)}/?resume=checkout`,
-      subscription_data: {
-        metadata: { offerId, cycles: n, firstName, lastName, phone },
-      },
+      subscription_data: { metadata: { offerId, cycles: n, firstName, lastName, phone } },
       metadata: { offerId, mode: `${n}x`, firstName, lastName, phone, cycles: n },
     });
 
@@ -199,16 +190,14 @@ app.post('/api/create-installments-session', async (req, res) => {
   }
 });
 
-// --- GET session (optionnel) ---
+// --- GET session ---
 app.get('/api/checkout-session/:id', async (req, res) => {
   try {
     const session = await stripe.checkout.sessions.retrieve(req.params.id, {
       expand: ['payment_intent', 'subscription'],
     });
     res.json(session);
-  } catch (e) {
-    res.status(400).json({ error: e?.raw?.message || e.message });
-  }
+  } catch (e) { res.status(400).json({ error: e?.raw?.message || e.message }); }
 });
 
 // --- START ---
