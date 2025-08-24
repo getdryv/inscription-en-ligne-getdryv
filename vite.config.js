@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      '/api': 'https://inscription-en-ligne-getdryv.onrender.com' // en dev, /api ira vers ton serveur
+      '/api': 'https://inscription-en-ligne-getdryv-1.onrender.com' // en dev, /api ira vers ton serveur
     }
   }
 })
