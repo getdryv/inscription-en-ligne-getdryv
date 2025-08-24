@@ -172,6 +172,6 @@ app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), (req, re
 
 // --- START ---
 app.listen(PORT, () => {
-  console.log(`✅ API Stripe sur https://inscription-en-ligne-getdryv.onrender.com:${PORT}`);
+  console.log(`✅ API Stripe sur https://inscription-en-ligne-getdryv-1.onrender.com/:${PORT}`);
   if (!WEBHOOK_SECRET) console.log('ℹ️ STRIPE_WEBHOOK_SECRET non défini (OK en DEV)');
 });
