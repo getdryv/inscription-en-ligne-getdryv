@@ -10,21 +10,61 @@ const app = express();
 const FRONT = process.env.FRONT_URL || 'https://inscription-en-ligne-getdryv-1.onrender.com';
 const PORT = process.env.PORT || 4242;
 const WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || null;
+
+// ⚠️ DOIT être une clé live en prod: sk_live_...
+if (!process.env.STRIPE_SECRET_KEY) {
+  console.error('❌ STRIPE_SECRET_KEY manquante côté serveur');
+}
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
 
-// CORS + JSON
-app.use(cors({ origin: FRONT, credentials: true }));
+// ---------- CORS robuste (prod + localhost)
+const allowedOrigins = [
+  FRONT,                           // prod (ton -1)
+  'https://inscription-en-ligne-getdryv.onrender.com', // variante sans -1 (au cas où)
+  'http://localhost:5173'          // dev
+].filter(Boolean);
+
+app.use(cors({
+  origin(origin, cb) {
+    if (!origin) return cb(null, true); // curl / webhooks
+    try {
+      const o = new URL(origin).origin;
+      return allowedOrigins.includes(o) ? cb(null, true) : cb(new Error(`Not allowed by CORS: ${origin}`));
+    } catch {
+      return cb(new Error('Invalid Origin'));
+    }
+  },
+  credentials: true
+}));
+app.options('*', cors());
 app.use(express.json());
+
+console.log('CORS allowed:', allowedOrigins);
+console.log('Front URL (success/cancel):', FRONT);
 
 // --- SANITY CHECK ---
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
+
+// --- DIAGNOSTIC (temporaire) ---
+app.get('/api/_diag', async (_req, res) => {
+  try {
+    const acct = await stripe.accounts.retrieve();
+    res.json({
+      corsFront: FRONT,
+      stripeKeyStartsWith: (process.env.STRIPE_SECRET_KEY || '').slice(0, 7), // sk_live/sk_test
+      stripeLiveMode: !!acct.livemode,
+      chargesEnabled: !!acct.charges_enabled
+    });
+  } catch (e) {
+    res.status(500).json({ error: e?.message || 'diag failed' });
+  }
+});
 
 // --- CREATE CHECKOUT (1x) ---
 app.post('/api/create-checkout-session', async (req, res) => {
   try {
     const { offerId, mode, firstName = '', lastName = '', phone = '', promoCode = '' } = req.body;
 
-    // ✅ Offres 1x (CENTIMES) — alignées sur le front
     const OFFERS = {
       "classique-10h": { label: "Permis 10 heures",       amount1x:  64900 },
       "classique-20h": { label: "Permis 20 heures",       amount1x:  99900 },
@@ -54,7 +94,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
       allow_promotion_codes: true,
 
       success_url: `${FRONT}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url:  `${FRONT}/?resume=checkout`, // ← revient dans ton flow, étape 3 restaurée côté front
+      cancel_url:  `${FRONT}/?resume=checkout`,
 
       metadata: {
         offerId, mode,
@@ -63,19 +103,21 @@ app.post('/api/create-checkout-session', async (req, res) => {
       },
     });
 
-    res.json({ id: session.id });
+    return res.json({ id: session.id });
   } catch (e) {
-    console.error('Erreur create-checkout-session:', e?.raw?.message || e.message);
-    res.status(500).json({ error: e?.raw?.message || e.message || 'Erreur interne du serveur' });
+    const msg  = e?.raw?.message || e?.message || 'Erreur interne du serveur';
+    const code = e?.raw?.code    || e?.code    || null;
+    const type = e?.raw?.type    || e?.type    || null;
+    console.error('Stripe error [1x]:', { msg, code, type });
+    return res.status(500).json({ error: msg, code, type });
   }
 });
 
-// --- INSTALLMENTS (ex: 2x/3x/4x sous forme d’abonnement) ---
+// --- INSTALLMENTS (2x/3x/4x par abonnement) ---
 app.post('/api/create-installments-session', async (req, res) => {
   try {
     const { offerId, cycles = 3, firstName = '', lastName = '', phone = '' } = req.body;
 
-    // ✅ Offres en plusieurs fois : TOTAL (CENTIMES)
     const OFFERS = {
       "classique-10h": { label: "Permis 10 heures",       amountTotal:  69900 },
       "classique-20h": { label: "Permis 20 heures",       amountTotal: 109900 },
@@ -117,14 +159,17 @@ app.post('/api/create-installments-session', async (req, res) => {
       metadata: { offerId, mode: `${n}x`, firstName, lastName, phone, cycles: n },
     });
 
-    res.json({ id: session.id });
+    return res.json({ id: session.id });
   } catch (e) {
-    console.error('Erreur create-installments-session:', e?.raw?.message || e.message);
-    res.status(500).json({ error: e?.raw?.message || e.message || 'Erreur interne du serveur' });
+    const msg  = e?.raw?.message || e?.message || 'Erreur interne du serveur';
+    const code = e?.raw?.code    || e?.code    || null;
+    const type = e?.raw?.type    || e?.type    || null;
+    console.error('Stripe error [nx]:', { msg, code, type });
+    return res.status(500).json({ error: msg, code, type });
   }
 });
 
-// --- (Optionnel) Récupérer une session pour afficher le reçu ---
+// --- Récupérer une session (reçu/debug) ---
 app.get('/api/checkout-session/:id', async (req, res) => {
   try {
     const session = await stripe.checkout.sessions.retrieve(req.params.id, {
@@ -136,7 +181,7 @@ app.get('/api/checkout-session/:id', async (req, res) => {
   }
 });
 
-// --- Webhook (optionnel mais conseillé) ---
+// --- Webhook Stripe ---
 app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), (req, res) => {
   let event = req.body;
   const sig = req.headers['stripe-signature'];
@@ -154,7 +199,6 @@ app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), (req, re
 
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
-    // Exemple: auto-cancel après N prélèvements pour du 2x/3x/4x
     const cycles = Number(session.metadata?.cycles || 0);
     if (session.mode === 'subscription' && session.subscription && [2,3,4].includes(cycles)) {
       const end = new Date();
@@ -172,6 +216,7 @@ app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), (req, re
 
 // --- START ---
 app.listen(PORT, () => {
-  console.log(`✅ API Stripe sur https://inscription-en-ligne-getdryv-1.onrender.com:${PORT}`);
+  console.log(`✅ API Stripe en écoute sur port ${PORT}`);
+  console.log(`➡️ Success/Cancel redirigent vers: ${FRONT}`);
   if (!WEBHOOK_SECRET) console.log('ℹ️ STRIPE_WEBHOOK_SECRET non défini (OK en DEV)');
 });
