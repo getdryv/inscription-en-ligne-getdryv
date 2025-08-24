@@ -3,11 +3,16 @@
   "private": true,
   "version": "0.0.2",
   "type": "module",
+  "description": "## Lancer en local (VS Code ou Terminal) 1. Assure-toi d’avoir **Node.js LTS** installé. 2. Dans le dossier du projet :",
+  "main": "postcss.config.js",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
     "start": "node server.cjs"
+  },
+  "engines": {
+    "node": ">=18 <21"
   },
   "dependencies": {
     "@stripe/stripe-js": "^7.8.0",
@@ -27,8 +32,6 @@
     "tailwindcss": "^3.4.4",
     "vite": "^5.3.3"
   },
-  "description": "## Lancer en local (VS Code ou Terminal) 1. Assure-toi d’avoir **Node.js LTS** installé. 2. Dans le dossier du projet :",
-  "main": "postcss.config.js",
   "keywords": [],
   "author": "",
   "license": "ISC"
