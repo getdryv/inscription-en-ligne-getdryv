@@ -4,6 +4,7 @@ const express = require('express');
 const cors = require('cors');
 const Stripe = require('stripe');
 const path = require('path');
+const fs = require('fs'); // <- ajouté pour tester l'existence d'admin.html
 
 const app = express();
 
@@ -147,7 +148,7 @@ app.get('/api/checkout-session/:id', async (req, res) => {
     const session = await stripe.checkout.sessions.retrieve(req.params.id, {
       expand: ['payment_intent', 'subscription'],
     });
-    res.json(session);
+  res.json(session);
   } catch (e) {
     res.status(400).json({ error: e?.raw?.message || e.message });
   }
@@ -156,12 +157,16 @@ app.get('/api/checkout-session/:id', async (req, res) => {
 // === Static files (Vite build) ===
 app.use(express.static(path.join(__dirname, 'dist')));
 
-// /admin.html et /admin
+// /admin.html et /admin — fallback si admin.html supprimé
 app.get(['/admin.html', '/admin'], (req, res) => {
-  res.sendFile(path.join(__dirname, 'dist', 'admin.html'));
+  const adminFile = path.join(__dirname, 'dist', 'admin.html');
+  if (fs.existsSync(adminFile)) {
+    return res.sendFile(adminFile);
+  }
+  return res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
-// Catch-all pour l'app publique
+// Catch-all pour l'app publique (SPA)
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
