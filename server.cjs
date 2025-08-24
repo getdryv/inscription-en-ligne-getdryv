@@ -2,6 +2,8 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const https = require('https');
+const dns = require('dns').promises;
 const Stripe = require('stripe');
 
 const app = express();
@@ -16,15 +18,31 @@ if (!process.env.STRIPE_SECRET_KEY) {
   console.error('❌ STRIPE_SECRET_KEY manquante');
   process.exit(1);
 }
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
+  apiVersion: '2024-06-20',
+  // pour que le message d'erreur ne masque pas la cause réelle
+  maxNetworkRetries: 0,
+});
 
 // Helpers
 const baseUrl = (req) => `${req.headers['x-forwarded-proto'] || req.protocol}://${req.get('host')}`;
+const logStripeErr = (e, ctx) => {
+  console.error(`❌ ${ctx}:`, {
+    name: e.name,
+    type: e.type,
+    code: e.code,
+    message: e.message,
+    detail: e.detail,
+    errno: e.errno,
+    syscall: e.syscall,
+    stack: e.stack?.split('\n').slice(0, 3).join(' | ')
+  });
+};
 
 // CORS (souple)
 app.use(cors());
 
-// --- Webhook AVANT tout body-parser JSON ---
+// --- Webhook AVANT le body-parser JSON ---
 app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), (req, res) => {
   let event = req.body;
   const sig = req.headers['stripe-signature'];
@@ -61,14 +79,48 @@ app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), (req, re
 app.use(express.json());
 
 // --- SANITY CHECK ---
-app.get('/api/health', (_req, res) => res.json({ ok: true }));
+app.get('/api/health', (_req, res) => res.json({
+  ok: true,
+  node: process.version,
+  front: FRONT
+}));
+
+// --- DIAGNOSTIC reseau vers Stripe & Internet ---
+app.get('/api/_diag', async (req, res) => {
+  try {
+    const resolves = await dns.lookup('api.stripe.com', { all: true });
+    const ipList = resolves.map(r => `${r.address}/${r.family}`).join(', ');
+
+    const head = (url) => new Promise((resolve, reject) => {
+      https.get(url, (r) => resolve({ status: r.statusCode, headers: r.headers }))
+        .on('error', reject).setTimeout(8000, function(){ this.destroy(new Error('Timeout')); });
+    });
+
+    const g = await head('https://www.google.com');
+    let stripeHeadOk = null;
+    try {
+      // on teste seulement la connexion TLS (pas d'auth)
+      stripeHeadOk = await head('https://api.stripe.com/');
+    } catch (e) {
+      stripeHeadOk = { error: e.message, code: e.code, syscall: e.syscall };
+    }
+
+    res.json({
+      node: process.version,
+      stripeDns: ipList,
+      googleHead: g,
+      stripeHead: stripeHeadOk
+    });
+  } catch (e) {
+    res.status(500).json({ diagError: e.message });
+  }
+});
 
 // --- CREATE CHECKOUT (1x) ---
 app.post('/api/create-checkout-session', async (req, res) => {
   try {
     const { offerId, mode, firstName = '', lastName = '', phone = '', promoCode = '' } = req.body;
 
-    // ✅ Offres 1x (CENTIMES) — alignées sur le front
     const OFFERS = {
       'classique-10h': { label: 'Permis 10 heures', amount1x:  64900 },
       'classique-20h': { label: 'Permis 20 heures', amount1x:  99900 },
@@ -99,25 +151,23 @@ app.post('/api/create-checkout-session', async (req, res) => {
       success_url: `${baseUrl(req)}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url:  `${baseUrl(req)}/?resume=checkout`,
       metadata: {
-        offerId, mode,
-        firstName, lastName, phone,
+        offerId, mode, firstName, lastName, phone,
         promoCode: (promoCode || '').trim(),
       },
     });
 
     res.json({ id: session.id });
   } catch (e) {
-    console.error('Erreur create-checkout-session:', e?.raw?.message || e.message);
+    logStripeErr(e, 'create-checkout-session');
     res.status(500).json({ error: e?.raw?.message || e.message || 'Erreur interne du serveur' });
   }
 });
 
-// --- INSTALLMENTS (2x/3x/4x sous forme d’abonnement) ---
+// --- INSTALLMENTS (2x/3x/4x) ---
 app.post('/api/create-installments-session', async (req, res) => {
   try {
     const { offerId, cycles = 3, firstName = '', lastName = '', phone = '' } = req.body;
 
-    // ✅ Offres en plusieurs fois : TOTAL (CENTIMES)
     const OFFERS = {
       'classique-10h': { label: 'Permis 10 heures', amountTotal:  69900 },
       'classique-20h': { label: 'Permis 20 heures', amountTotal: 109900 },
@@ -158,12 +208,12 @@ app.post('/api/create-installments-session', async (req, res) => {
 
     res.json({ id: session.id });
   } catch (e) {
-    console.error('Erreur create-installments-session:', e?.raw?.message || e.message);
+    logStripeErr(e, 'create-installments-session');
     res.status(500).json({ error: e?.raw?.message || e.message || 'Erreur interne du serveur' });
   }
 });
 
-// --- (Optionnel) Récupérer une session pour afficher le reçu ---
+// --- (Optionnel) GET session ---
 app.get('/api/checkout-session/:id', async (req, res) => {
   try {
     const session = await stripe.checkout.sessions.retrieve(req.params.id, {
