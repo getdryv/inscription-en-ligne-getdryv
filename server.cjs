@@ -3,7 +3,8 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const https = require('https');
-const dns = require('dns').promises;
+const dns = require('dns');
+const dnsPromises = require('dns').promises;
 const Stripe = require('stripe');
 
 const app = express();
@@ -14,28 +15,32 @@ const FRONT = (process.env.FRONT_URL || 'https://inscription-en-ligne-getdryv-1.
 const PORT = process.env.PORT || 4242;
 const WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || null;
 
+// 🔧 Réseau: privilégier IPv4 (évite les soucis IPv6 vers api.stripe.com)
+if (dns.setDefaultResultOrder) dns.setDefaultResultOrder('ipv4first');
+const agent = new https.Agent({
+  keepAlive: true,
+  // forcer la résolution IPv4 pour toutes les requêtes Stripe
+  lookup: (hostname, options, cb) => require('dns').lookup(hostname, { family: 4 }, cb),
+});
+
 if (!process.env.STRIPE_SECRET_KEY) {
   console.error('❌ STRIPE_SECRET_KEY manquante');
   process.exit(1);
 }
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
   apiVersion: '2024-06-20',
-  // pour que le message d'erreur ne masque pas la cause réelle
-  maxNetworkRetries: 0,
+  httpClient: Stripe.createNodeHttpClient(agent),
+  maxNetworkRetries: 0,        // on laisse Stripe ne PAS réessayer pour voir l’erreur nette
+  timeout: 20000,              // 20s pour être verbeux dans les logs si ça coince
 });
 
 // Helpers
 const baseUrl = (req) => `${req.headers['x-forwarded-proto'] || req.protocol}://${req.get('host')}`;
 const logStripeErr = (e, ctx) => {
   console.error(`❌ ${ctx}:`, {
-    name: e.name,
-    type: e.type,
-    code: e.code,
-    message: e.message,
-    detail: e.detail,
-    errno: e.errno,
-    syscall: e.syscall,
-    stack: e.stack?.split('\n').slice(0, 3).join(' | ')
+    name: e.name, type: e.type, code: e.code, message: e.message,
+    errno: e.errno, syscall: e.syscall,
+    stack: e.stack?.split('\n').slice(0, 2).join(' | ')
   });
 };
 
@@ -48,11 +53,9 @@ app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), (req, re
   const sig = req.headers['stripe-signature'];
 
   try {
-    if (WEBHOOK_SECRET) {
-      event = stripe.webhooks.constructEvent(req.body, sig, WEBHOOK_SECRET);
-    } else {
-      event = JSON.parse(req.body.toString());
-    }
+    event = WEBHOOK_SECRET
+      ? stripe.webhooks.constructEvent(req.body, sig, WEBHOOK_SECRET)
+      : JSON.parse(req.body.toString());
   } catch (err) {
     console.error('Webhook signature error:', err.message);
     return res.status(400).send(`Webhook Error: ${err.message}`);
@@ -79,38 +82,21 @@ app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), (req, re
 app.use(express.json());
 
 // --- SANITY CHECK ---
-app.get('/api/health', (_req, res) => res.json({
-  ok: true,
-  node: process.version,
-  front: FRONT
-}));
+app.get('/api/health', (_req, res) => res.json({ ok: true, node: process.version, front: FRONT }));
 
-// --- DIAGNOSTIC reseau vers Stripe & Internet ---
-app.get('/api/_diag', async (req, res) => {
+// --- DIAG: tester la connectivité vers Stripe ---
+app.get('/api/_diag', async (_req, res) => {
   try {
-    const resolves = await dns.lookup('api.stripe.com', { all: true });
-    const ipList = resolves.map(r => `${r.address}/${r.family}`).join(', ');
-
-    const head = (url) => new Promise((resolve, reject) => {
+    const resolves = await dnsPromises.lookup('api.stripe.com', { all: true });
+    const ipList = resolves.map(r => `${r.address}/${r.family}`);
+    const ping = (url) => new Promise((resolve) => {
       https.get(url, (r) => resolve({ status: r.statusCode, headers: r.headers }))
-        .on('error', reject).setTimeout(8000, function(){ this.destroy(new Error('Timeout')); });
+        .on('error', (e) => resolve({ error: e.message, code: e.code, syscall: e.syscall }))
+        .setTimeout(8000, function(){ this.destroy(new Error('Timeout')); });
     });
-
-    const g = await head('https://www.google.com');
-    let stripeHeadOk = null;
-    try {
-      // on teste seulement la connexion TLS (pas d'auth)
-      stripeHeadOk = await head('https://api.stripe.com/');
-    } catch (e) {
-      stripeHeadOk = { error: e.message, code: e.code, syscall: e.syscall };
-    }
-
-    res.json({
-      node: process.version,
-      stripeDns: ipList,
-      googleHead: g,
-      stripeHead: stripeHeadOk
-    });
+    const g = await ping('https://www.google.com');
+    const s = await ping('https://api.stripe.com/');
+    res.json({ node: process.version, stripeDns: ipList, googleHead: g, stripeHead: s });
   } catch (e) {
     res.status(500).json({ diagError: e.message });
   }
@@ -213,7 +199,7 @@ app.post('/api/create-installments-session', async (req, res) => {
   }
 });
 
-// --- (Optionnel) GET session ---
+// --- GET session (optionnel) ---
 app.get('/api/checkout-session/:id', async (req, res) => {
   try {
     const session = await stripe.checkout.sessions.retrieve(req.params.id, {
