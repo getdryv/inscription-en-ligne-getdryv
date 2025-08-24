@@ -3,6 +3,10 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const Stripe = require('stripe');
+const dns = require('dns');
+
+// 🔒 Évite les soucis IPv6 : privilégie IPv4
+dns.setDefaultResultOrder('ipv4first');
 
 const app = express();
 
@@ -10,10 +14,59 @@ const app = express();
 const FRONT = process.env.FRONT_URL || 'https://inscription-en-ligne-getdryv.onrender.com';
 const PORT = process.env.PORT || 4242;
 const WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || null;
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
 
-// CORS + JSON
+// ✅ Trim la clé (supprime espaces / retours de ligne)
+const STRIPE_KEY = (process.env.STRIPE_SECRET_KEY || '').trim();
+const stripe = new Stripe(STRIPE_KEY, { apiVersion: '2024-06-20' });
+
+// --- CORS ---
 app.use(cors({ origin: FRONT, credentials: true }));
+
+// ────────────────────────────────────────────────────────────────
+//  WEBHOOK STRIPE (⚠️ corps RAW) — doit être DÉCLARÉ AVANT express.json()
+// ────────────────────────────────────────────────────────────────
+app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), (req, res) => {
+  let event = req.body; // Buffer brut
+  const sig = req.headers['stripe-signature'];
+
+  try {
+    if (WEBHOOK_SECRET) {
+      // Vérifie la signature avec le corps brut
+      event = stripe.webhooks.constructEvent(req.body, sig, WEBHOOK_SECRET);
+    } else {
+      // Dev only (sans secret) : parse brut
+      event = JSON.parse(req.body.toString());
+    }
+  } catch (err) {
+    console.error('Webhook signature error:', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  // Traitements
+  if (event.type === 'checkout.session.completed') {
+    const session = event.data.object;
+    // Auto-cancel après N prélèvements pour du 2x/3x/4x (abonnement)
+    const cycles = Number(session.metadata?.cycles || 0);
+
+    if (session.mode === 'subscription' && session.subscription && [2, 3, 4].includes(cycles)) {
+      const end = new Date();
+      end.setMonth(end.getMonth() + (cycles - 1));
+      stripe.subscriptions.update(session.subscription, {
+        cancel_at: Math.floor(end.getTime() / 1000),
+      }).then(() => {
+        console.log(`Subscription ${session.subscription} auto-cancel @ ${end.toISOString()}`);
+      }).catch(console.error);
+    }
+  }
+
+  // (Tu peux ajouter ici d’autres cases : invoice.paid, payment_intent.succeeded, etc.)
+
+  return res.json({ received: true });
+});
+
+// ────────────────────────────────────────────────────────────────
+//  JSON parser pour TOUTES LES AUTRES ROUTES (après le webhook)
+// ────────────────────────────────────────────────────────────────
 app.use(express.json());
 
 // --- SANITY CHECK ---
@@ -54,7 +107,7 @@ app.post('/api/create-checkout-session', async (req, res) => {
       allow_promotion_codes: true,
 
       success_url: `${FRONT}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url:  `${FRONT}/?resume=checkout`, // ← revient dans ton flow, étape 3 restaurée côté front
+      cancel_url:  `${FRONT}/?resume=checkout`,
 
       metadata: {
         offerId, mode,
@@ -136,42 +189,9 @@ app.get('/api/checkout-session/:id', async (req, res) => {
   }
 });
 
-// --- Webhook (optionnel mais conseillé) ---
-app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), (req, res) => {
-  let event = req.body;
-  const sig = req.headers['stripe-signature'];
-
-  try {
-    if (WEBHOOK_SECRET) {
-      event = stripe.webhooks.constructEvent(req.body, sig, WEBHOOK_SECRET);
-    } else {
-      event = JSON.parse(req.body.toString());
-    }
-  } catch (err) {
-    console.error('Webhook signature error:', err.message);
-    return res.status(400).send(`Webhook Error: ${err.message}`);
-  }
-
-  if (event.type === 'checkout.session.completed') {
-    const session = event.data.object;
-    // Exemple: auto-cancel après N prélèvements pour du 2x/3x/4x
-    const cycles = Number(session.metadata?.cycles || 0);
-    if (session.mode === 'subscription' && session.subscription && [2,3,4].includes(cycles)) {
-      const end = new Date();
-      end.setMonth(end.getMonth() + (cycles - 1));
-      stripe.subscriptions.update(session.subscription, {
-        cancel_at: Math.floor(end.getTime() / 1000),
-      }).then(() => {
-        console.log(`Subscription ${session.subscription} auto-cancel @ ${end.toISOString()}`);
-      }).catch(console.error);
-    }
-  }
-
-  res.json({ received: true });
-});
-
 // --- START ---
 app.listen(PORT, () => {
-  console.log(`✅ API Stripe sur https://inscription-en-ligne-getdryv.onrender.com:${PORT}`);
+  console.log(`✅ API Stripe sur port ${PORT}`);
+  console.log(`➡️ FRONT_URL = ${FRONT}`);
   if (!WEBHOOK_SECRET) console.log('ℹ️ STRIPE_WEBHOOK_SECRET non défini (OK en DEV)');
 });
