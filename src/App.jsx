@@ -3,22 +3,22 @@ import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { loadStripe } from '@stripe/stripe-js';
 
 // --- Auth / Firebase
-// src/App.jsx
 import { auth, db } from './firebase';
 import { loginWithGoogle } from './auth';
-import { getFirestore, collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 
-// ✅ Utilise ta modale et tes icônes du dossier components
+// UI
 import OfferModal from './components/OfferModal.jsx';
 import { Gift, Calendar, CreditCard } from './components/icons.jsx';
 
-// Clé publique via .env du FRONT : VITE_STRIPE_PUBLISHABLE_KEY=pk_test_...
+// ---------- Stripe (clé publique)
 const PK = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY;
 if (!PK) console.error('⚠️ VITE_STRIPE_PUBLISHABLE_KEY manquante dans le .env du front.');
 const stripePromise = PK ? loadStripe(PK) : Promise.resolve(null);
 
-// ✅ Base URL de l’API (front). Par défaut 4242 en local.
-const API = import.meta.env.VITE_API_BASE || '';
+// ---------- Base API (anti double /api)
+const BASE = (import.meta.env.VITE_API_BASE || '').replace(/\/+$/, ''); // retire les slashs finaux
+const API_PREFIX = BASE ? `${BASE}/api` : '/api'; // prod: https://…/api ; dev: /api (proxy/rewrite)
 
 // ------------------------------------------------------------------
 // OFFRES (tarifs + options)
@@ -83,53 +83,68 @@ const OFFERS = {
 // FICHES PACKS pour la modale
 const PACK_CONTENT = {
   'classique-10h': {
-    summary: "Parfait si tu as déjà avancé : 10 h ciblées pour finaliser ta préparation et être prêt le jour J.",
-    included: ["10 heures de conduite", "Accès illimité au code en ligne", "Évaluation initiale offerte"],
-    conditions: ["Code de la route valide", "Attester d’au moins 10h de conduite en boite manuelle ou 3 heures en boite automatique       "],
-    excluded: ["Frais d'examen du code : 30 €", "Examen pratique : 55 €"],
+    summary:
+      "Parfait si tu as déjà avancé : 10 h ciblées pour finaliser ta préparation et être prêt le jour J.",
+    included: ['10 heures de conduite', 'Accès illimité au code en ligne', 'Évaluation initiale offerte'],
+    conditions: [
+      'Code de la route valide',
+      'Attester d’au moins 10h de conduite en boite manuelle ou 3 heures en boite automatique       ',
+    ],
+    excluded: ["Frais d'examen du code : 30 €", 'Examen pratique : 55 €'],
   },
   'classique-20h': {
-    summary: "La formation initiale classique pour démarrer sereinement et maîtriser les bases.",
-    included: ["20 heures de conduite", "Accès illimité au code en ligne", "Évaluation initiale offerte"],
+    summary: 'La formation initiale classique pour démarrer sereinement et maîtriser les bases.',
+    included: ['20 heures de conduite', 'Accès illimité au code en ligne', 'Évaluation initiale offerte'],
     conditions: [],
-    excluded: ["Frais d'examen du code : 30 €", "Examen pratique : 55 €"],
+    excluded: ["Frais d'examen du code : 30 €", 'Examen pratique : 55 €'],
   },
   'classique-30h': {
-    summary: "La sérénité totale : 10 h de plus que le minimum pour ancrer les acquis et gagner en confiance.",
-    included: ["30 heures de conduite", "Accès illimité au code en ligne", "Évaluation initiale offerte"],
+    summary: 'La sérénité totale : 10 h de plus que le minimum pour ancrer les acquis et gagner en confiance.',
+    included: ['30 heures de conduite', 'Accès illimité au code en ligne', 'Évaluation initiale offerte'],
     conditions: [],
-    excluded: ["Frais d'examen du code : 30 €", "Examen pratique : 55 €"],
+    excluded: ["Frais d'examen du code : 30 €", 'Examen pratique : 55 €'],
   },
   'accelere-20h': {
     summary: "Formation accélérée et passage à l'examen en moins de 2 mois, avec programme intensif.",
-    included: ["20 heures de conduite en 20 jours", "Accès illimité au code en ligne", "Évaluation initiale offerte", "Examen pratique inclus"],
-    conditions: ["Code de la route valide (ou en cours d'obtention)", "Disponibilité pour le planning intensif"],
+    included: [
+      '20 heures de conduite en 20 jours',
+      'Accès illimité au code en ligne',
+      'Évaluation initiale offerte',
+      'Examen pratique inclus',
+    ],
+    conditions: ["Code de la route valide (ou en cours d'obtention)", 'Disponibilité pour le planning intensif'],
     excluded: [],
-    disclaimer: "Examen du code non inclus (30 €).",
+    disclaimer: 'Examen du code non inclus (30 €).',
   },
   'accelere-30h': {
-    summary: "Intensif 30 h : prêt rapidement et examen en moins de 2 mois.",
-    included: ["30 heures de conduite en 30 jours", "Accès illimité au code en ligne", "Évaluation initiale offerte", "Examen pratique inclus"],
-    conditions: ["Code de la route valide (ou en cours d'obtention)", "Disponibilité pour le planning intensif"],
+    summary: 'Intensif 30 h : prêt rapidement et examen en moins de 2 mois.',
+    included: [
+      '30 heures de conduite en 30 jours',
+      'Accès illimité au code en ligne',
+      'Évaluation initiale offerte',
+      'Examen pratique inclus',
+    ],
+    conditions: ["Code de la route valide (ou en cours d'obtention)", 'Disponibilité pour le planning intensif'],
     excluded: [],
-    disclaimer: "Examen du code non inclus (30 €).",
+    disclaimer: 'Examen du code non inclus (30 €).',
   },
 };
 
 const BRAND = {
   primary: '#635bff',
-  font: 'Montserrat, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial, "Apple Color Emoji", "Segoe UI Emoji"',
+  font:
+    'Montserrat, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial, "Apple Color Emoji", "Segoe UI Emoji"',
 };
 
 function Stepper({ step }) {
   return (
     <div className="sticky top-0 z-10 bg-white/90 backdrop-blur border-b">
-      <div className="mx-auto px-4 py-3 flex items-center justify-between gap-4" style={{maxWidth:'720px'}}>
+      <div className="mx-auto px-4 py-3 flex items-center justify-between gap-4" style={{ maxWidth: '720px' }}>
         <div className="flex items-center gap-3">
-          <div className="font-extrabold text-lg" style={{ color: BRAND.primary }}>GETdryv</div>
-          <div className="text-xs text-gray-700">
-            Boîte manuelle ou automatique • 14 jours pour changer d&apos;avis
+          <div className="font-extrabold text-lg" style={{ color: BRAND.primary }}>
+            GETdryv
           </div>
+          <div className="text-xs text-gray-700">Boîte manuelle ou automatique • 14 jours pour changer d&apos;avis</div>
         </div>
         <div className="text-sm font-medium">{step}/3</div>
       </div>
@@ -177,9 +192,7 @@ export default function App() {
   // heures dispo par famille
   const chipClass = (selected) =>
     `rounded-2xl px-4 py-2 text-sm font-medium border transition
-     ${selected
-       ? 'bg-[#635bff] text-white border-transparent'
-       : 'bg-[#E8EAFF] text-[#463CFF] border-transparent hover:bg-[#e0e3ff]'}`;
+     ${selected ? 'bg-[#635bff] text-white border-transparent' : 'bg-[#E8EAFF] text-[#463CFF] border-transparent hover:bg-[#e0e3ff]'}`;
 
   const hoursOptions = useMemo(() => {
     const opts = new Set(OFFERS[tab].map((o) => o.hours));
@@ -187,7 +200,10 @@ export default function App() {
   }, [tab]);
 
   const [selectedHours, setSelectedHours] = useState(null);
-  useEffect(() => { setSelectedHours(hoursOptions[0] ?? null); setExpanded(false); }, [tab, hoursOptions]);
+  useEffect(() => {
+    setSelectedHours(hoursOptions[0] ?? null);
+    setExpanded(false);
+  }, [tab, hoursOptions]);
 
   // offre courante
   const currentOffer = useMemo(() => {
@@ -212,51 +228,46 @@ export default function App() {
     <button
       onClick={() => window.open('https://calendly.com/hello-getdryv/nouvelle-reunion?month=2025-08', '_blank')}
       className="w-full rounded-2xl py-3 font-semibold border"
-      style={{ background:'#fff', color:BRAND.primary, borderColor:BRAND.primary }}
+      style={{ background: '#fff', color: BRAND.primary, borderColor: BRAND.primary }}
     >
       Inscription en agence (RDV)
     </button>
   );
 
   // Titres
-  const cardTitle = tab === 'classique' ? 'Permis B' : "Permis B - Accéléré";
+  const cardTitle = tab === 'classique' ? 'Permis B' : 'Permis B - Accéléré';
 
   const offeredKeywords = ['e-learning', 'Évaluation initiale', 'évaluation initiale'];
   const renderPerk = (p) => {
     const lower = p.toLowerCase();
     const hasOffertWord = /\boffert(e|s)?\b/.test(lower);
-    const isKeywordOffered = offeredKeywords.some(k => lower.includes(k));
+    const isKeywordOffered = offeredKeywords.some((k) => lower.includes(k));
     const isOffert = hasOffertWord || isKeywordOffered;
     const clean = p.replace(/\s*\b(offert|offerte|offerts|offertes)\b/gi, '').trim();
     const isPlanning = lower.includes('planning flexible');
     return (
       <span className="inline-flex items-center gap-1.5 rounded-2xl border px-3 py-1 text-sm" key={p}>
-        {isOffert ? <Gift/> : isPlanning ? <Calendar/> : null}
+        {isOffert ? <Gift /> : isPlanning ? <Calendar /> : null}
         {clean}
       </span>
     );
   };
 
   // ---------- Étape 1 handlers
-  // --------- Étape 1 handlers
-const saveLeadAndGo = async (lead) => {
-  try {
-    console.log('~ Tentative d’enregistrement du lead :', lead);
-
-    const ref = await addDoc(collection(db, 'leads'), {
-      ...lead,
-      createdAt: serverTimestamp(),
-    });
-
-    console.log('✅ Lead enregistré avec succès, id =', ref.id);
-  } catch (e) {
-    console.error('❌ Lead non enregistré en Firestore :', e.code || e.message, e);
-    alert('Erreur Firestore: ' + (e.code || e.message));
-  }
-
-  setStep(2);
-};
-
+  const saveLeadAndGo = async (lead) => {
+    try {
+      console.log('~ Tentative d’enregistrement du lead :', lead);
+      const ref = await addDoc(collection(db, 'leads'), {
+        ...lead,
+        createdAt: serverTimestamp(),
+      });
+      console.log('✅ Lead enregistré avec succès, id =', ref.id);
+    } catch (e) {
+      console.error('❌ Lead non enregistré en Firestore :', e.code || e.message, e);
+      alert('Erreur Firestore: ' + (e.code || e.message));
+    }
+    setStep(2);
+  };
 
   const handleManualContinue = async () => {
     setLeadError('');
@@ -274,7 +285,8 @@ const saveLeadAndGo = async (lead) => {
   };
 
   const handleGoogleContinue = async () => {
-    setBusy(true); setLeadError('');
+    setBusy(true);
+    setLeadError('');
     try {
       await loginWithGoogle();
       const u = auth.currentUser;
@@ -297,7 +309,7 @@ const saveLeadAndGo = async (lead) => {
     }
   };
 
-  // ---------- Restauration quand on revient de Stripe (flèche ou bouton Retour)
+  // ---------- Restauration quand on revient de Stripe
   useEffect(() => {
     const url = new URL(window.location.href);
     const resume = url.searchParams.get('resume') === 'checkout';
@@ -312,7 +324,6 @@ const saveLeadAndGo = async (lead) => {
           setStep(3);
         }
       } catch (_) {}
-      // Nettoie le flag & l’URL ?resume=checkout
       sessionStorage.removeItem('gd:wentToStripe');
       url.searchParams.delete('resume');
       const newSearch = url.searchParams.toString();
@@ -324,38 +335,40 @@ const saveLeadAndGo = async (lead) => {
   // ---------- Paiement
   const handleCheckout = async () => {
     if (!selection?.offerId || !selection?.mode) {
-      alert("Sélection invalide.");
+      alert('Sélection invalide.');
       return;
     }
 
     const stripe = await stripePromise;
     if (!stripe) {
-      alert("Clé publique Stripe absente : ajoute VITE_STRIPE_PUBLISHABLE_KEY dans le .env du front puis redémarre `npm run dev`.");
+      alert(
+        "Clé publique Stripe absente : ajoute VITE_STRIPE_PUBLISHABLE_KEY dans le .env du front puis redémarre `npm run dev`."
+      );
       return;
     }
 
     const isOneShot = selection.mode === '1x';
-    const endpoint = isOneShot
-      ? '/api/create-checkout-session'
-      : '/api/create-installments-session';
+    const path = isOneShot ? 'create-checkout-session' : 'create-installments-session';
+    const url = `${API_PREFIX}/${path}`;
 
+    // corps de requête
     const payload = isOneShot
       ? { offerId: selection.offerId, mode: selection.mode }
-      : { offerId: selection.offerId, cycles: Number(selection.mode.replace('x','')) };
+      : { offerId: selection.offerId, cycles: Number(selection.mode.replace('x', '')) };
 
     try {
-      const res = await fetch(`${API}${endpoint}`, {
+      const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
       });
 
-      const text = await res.text();
+      const text = await res.text(); // permet d'inspecter les 500
       const data = text ? JSON.parse(text) : null;
 
-      if (!res.ok) throw new Error((data && data.error) || `HTTP ${res.status} - ${text || 'réponse vide'}`);
+      if (!res.ok) throw new Error((data && data.error) || `HTTP ${res.status} – ${text || 'réponse vide'}`);
 
-      // ✅ On mémorise l’état pour restaurer la page exacte au retour
+      // mémorise l’état pour restaurer au retour
       sessionStorage.setItem('gd:selection', JSON.stringify(selection));
       sessionStorage.setItem('gd:wentToStripe', '1');
 
@@ -363,7 +376,7 @@ const saveLeadAndGo = async (lead) => {
       if (error) alert(error.message);
     } catch (e) {
       console.error(e);
-      alert("Impossible de lancer le paiement : " + e.message);
+      alert('Impossible de lancer le paiement : ' + e.message);
     }
   };
 
@@ -371,7 +384,7 @@ const saveLeadAndGo = async (lead) => {
     <div style={{ fontFamily: BRAND.font }} className="min-h-screen text-gray-900">
       <Stepper step={step} />
 
-      <main className="mx-auto px-4 py-8" style={{maxWidth:'720px'}}>
+      <main className="mx-auto px-4 py-8" style={{ maxWidth: '720px' }}>
         {/* Étape 1 — Inscription (deux méthodes) */}
         {step === 1 && (
           <section className="space-y-6">
@@ -381,9 +394,7 @@ const saveLeadAndGo = async (lead) => {
               <span className="hidden sm:inline">,</span> ou continue avec Google.
             </p>
             {leadError && (
-              <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                {leadError}
-              </div>
+              <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{leadError}</div>
             )}
 
             {/* Méthode 1 : Formulaire rapide */}
@@ -392,24 +403,45 @@ const saveLeadAndGo = async (lead) => {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <label className="grid gap-1">
                     <span className="text-sm">Prénom</span>
-                    <input className="rounded-xl border px-3 py-2" value={first} onChange={e=>setFirst(e.target.value)} placeholder="Ex : Nicolas" />
+                    <input
+                      className="rounded-xl border px-3 py-2"
+                      value={first}
+                      onChange={(e) => setFirst(e.target.value)}
+                      placeholder="Ex : Nicolas"
+                    />
                   </label>
                   <label className="grid gap-1">
                     <span className="text-sm">Nom</span>
-                    <input className="rounded-xl border px-3 py-2" value={last} onChange={e=>setLast(e.target.value)} placeholder="Ex : Dumont" />
+                    <input
+                      className="rounded-xl border px-3 py-2"
+                      value={last}
+                      onChange={(e) => setLast(e.target.value)}
+                      placeholder="Ex : Dumont"
+                    />
                   </label>
                 </div>
                 <label className="grid gap-1">
                   <span className="text-sm">Email</span>
-                  <input type="email" className="rounded-xl border px-3 py-2" value={email} onChange={e=>setEmail(e.target.value)} placeholder="vous@exemple.com" />
+                  <input
+                    type="email"
+                    className="rounded-xl border px-3 py-2"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="vous@exemple.com"
+                  />
                 </label>
                 <label className="grid gap-1">
                   <span className="text-sm">Téléphone</span>
-                  <input className="rounded-xl border px-3 py-2" value={phone} onChange={e=>setPhone(e.target.value)} placeholder="06 12 34 56 78" />
+                  <input
+                    className="rounded-xl border px-3 py-2"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    placeholder="06 12 34 56 78"
+                  />
                 </label>
 
                 <PrimaryButton onClick={handleManualContinue} disabled={busy}>
-                  {busy ? '...' : "Voir les tarifs"}
+                  {busy ? '...' : 'Voir les tarifs'}
                 </PrimaryButton>
               </div>
             </div>
@@ -419,10 +451,22 @@ const saveLeadAndGo = async (lead) => {
               <h2 className="text-xl font-semibold mb-3 text-center">ou</h2>
               <OutlineButton onClick={handleGoogleContinue} disabled={busy}>
                 <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
-                  <path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.8 32.6 29.3 36 24 36 16.8 36 11 30.2 11 23S16.8 10 24 10c3.7 0 7 1.4 9.5 3.7l5.6-5.6C35.6 4.1 30.1 2 24 2 11.8 2 2 11.8 2 24s9.8 22 22 22c11.9 0 21.6-8.6 21.6-22 0-1.1-.1-2.2-.3-3.5z"/>
-                  <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.9 16 19.1 13 24 13c3.7 0 7 1.4 9.5 3.7l5.6-5.6C35.6 4.1 30.1 2 24 2 15 2 7.4 7.2 6.3 14.7z"/>
-                  <path fill="#4CAF50" d="M24 46c6 0 11.5-2.3 15.4-6.1l-7.1-5.8C30.9 35.7 27.7 37 24 37c-5.2 0-9.7-3.4-11.3-8.1l-6.5 5.1C8.4 41 15.6 46 24 46z"/>
-                  <path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-1.7 4.6-6.1 8-11.3 8-5.2 0-9.7-3.4-11.3-8.1l-6.5 5.1C8.4 41 15.6 46 24 46c11.9 0 21.6-8.6 21.6-22 0-1.1-.1-2.2-.3-3.5z"/>
+                  <path
+                    fill="#FFC107"
+                    d="M43.6 20.5H42V20H24v8h11.3C33.8 32.6 29.3 36 24 36 16.8 36 11 30.2 11 23S16.8 10 24 10c3.7 0 7 1.4 9.5 3.7l5.6-5.6C35.6 4.1 30.1 2 24 2 11.8 2 2 11.8 2 24s9.8 22 22 22c11.9 0 21.6-8.6 21.6-22 0-1.1-.1-2.2-.3-3.5z"
+                  />
+                  <path
+                    fill="#FF3D00"
+                    d="M6.3 14.7l6.6 4.8C14.9 16 19.1 13 24 13c3.7 0 7 1.4 9.5 3.7l5.6-5.6C35.6 4.1 30.1 2 24 2 15 2 7.4 7.2 6.3 14.7z"
+                  />
+                  <path
+                    fill="#4CAF50"
+                    d="M24 46c6 0 11.5-2.3 15.4-6.1l-7.1-5.8C30.9 35.7 27.7 37 24 37c-5.2 0-9.7-3.4-11.3-8.1l-6.5 5.1C8.4 41 15.6 46 24 46z"
+                  />
+                  <path
+                    fill="#1976D2"
+                    d="M43.6 20.5H42V20H24v8h11.3c-1.7 4.6-6.1 8-11.3 8-5.2 0-9.7-3.4-11.3-8.1l-6.5 5.1C8.4 41 15.6 46 24 46c11.9 0 21.6-8.6 21.6-22 0-1.1-.1-2.2-.3-3.5z"
+                  />
                 </svg>
                 <span>Continuer avec Google</span>
               </OutlineButton>
@@ -435,11 +479,15 @@ const saveLeadAndGo = async (lead) => {
           <section className="space-y-6">
             {/* Onglets */}
             <div className="flex items-center justify-center gap-2">
-              <button className={chipClass(tab === 'classique')} onClick={() => setTab('classique')}>Classique</button>
-              <button className={chipClass(tab === 'accelere')} onClick={() => setTab('accelere')}>Accélérée</button>
+              <button className={chipClass(tab === 'classique')} onClick={() => setTab('classique')}>
+                Classique
+              </button>
+              <button className={chipClass(tab === 'accelere')} onClick={() => setTab('accelere')}>
+                Accélérée
+              </button>
             </div>
 
-            <div className="rounded-3xl border p-5 shadow-sm mx-auto bg-white" style={{maxWidth:'720px'}}>
+            <div className="rounded-3xl border p-5 shadow-sm mx-auto bg-white" style={{ maxWidth: '720px' }}>
               {/* Titre */}
               <h3 className="text-xl md:text-2xl font-semibold" style={{ color: BRAND.primary }}>
                 {cardTitle}
@@ -451,7 +499,10 @@ const saveLeadAndGo = async (lead) => {
                   <button
                     key={h}
                     className={chipClass(selectedHours === h)}
-                    onClick={() => { setSelectedHours(h); setExpanded(false); }}
+                    onClick={() => {
+                      setSelectedHours(h);
+                      setExpanded(false);
+                    }}
                     aria-pressed={selectedHours === h}
                   >
                     {h} h
@@ -460,22 +511,23 @@ const saveLeadAndGo = async (lead) => {
               </div>
 
               {/* Perks */}
-              <div className="mt-3 flex flex-wrap gap-2 items-center">
-                {currentOffer.perks.map(renderPerk)}
-              </div>
+              <div className="mt-3 flex flex-wrap gap-2 items-center">{currentOffer.perks.map(renderPerk)}</div>
 
               {/* Prix */}
               <div className="mt-4 grid gap-1">
                 <div className="flex items-center gap-3">
-                  <div className="text-2xl font-extrabold">
-                    {currentOffer.payIn1x.amount.toLocaleString('fr-FR')} €
-                  </div>
+                  <div className="text-2xl font-extrabold">{currentOffer.payIn1x.amount.toLocaleString('fr-FR')} €</div>
                   <div className="text-lg line-through text-gray-400">
                     {currentOffer.installments.total.toLocaleString('fr-FR')} €
                   </div>
                   {currentOffer.allowedCycles?.length > 0 && (
                     <span className="text-xs rounded-full px-2 py-0.5 border">
-                      {currentOffer.allowedCycles.slice().sort().map(n => `${n}×`).join(' / ')} possible
+                      {currentOffer.allowedCycles
+                        .slice()
+                        .sort()
+                        .map((n) => `${n}×`)
+                        .join(' / ')}{' '}
+                      possible
                     </span>
                   )}
                 </div>
@@ -493,7 +545,10 @@ const saveLeadAndGo = async (lead) => {
                   Voir l’offre
                 </button>
                 <button
-                  onClick={() => { setExpanded(true); setTimeout(()=> payAnchorRef.current?.scrollIntoView({behavior:'smooth'}), 0); }}
+                  onClick={() => {
+                    setExpanded(true);
+                    setTimeout(() => payAnchorRef.current?.scrollIntoView({ behavior: 'smooth' }), 0);
+                  }}
                   className="rounded-full px-5 py-3 font-semibold text-white"
                   style={{ background: BRAND.primary }}
                 >
@@ -506,7 +561,7 @@ const saveLeadAndGo = async (lead) => {
                 <div
                   ref={payAnchorRef}
                   className="mt-5 rounded-2xl p-4 space-y-3"
-                  style={{ background:'#E8EAFF', color:'#463CFF' }}
+                  style={{ background: '#E8EAFF', color: '#463CFF' }}
                 >
                   <div className="grid gap-2">
                     {/* CB 1x */}
@@ -523,10 +578,10 @@ const saveLeadAndGo = async (lead) => {
                         setStep(3);
                       }}
                       className="w-full rounded-2xl bg-white border border-[#DAD7FF] px-4 py-4 flex items-center justify-between"
-                      style={{color:'#463CFF'}}
+                      style={{ color: '#463CFF' }}
                     >
                       <div className="flex items-center gap-3">
-                        <CreditCard/>
+                        <CreditCard />
                         <span className="font-medium">CB 1×</span>
                         <span className="mx-2">-</span>
                         <div className="leading-tight">
@@ -538,47 +593,54 @@ const saveLeadAndGo = async (lead) => {
                     </button>
 
                     {/* CB multi */}
-                    {currentOffer.allowedCycles?.slice().sort().map(n => (
-                      <button
-                        key={n}
-                        onClick={() => {
-                          const per = perCycleAmount(currentOffer, n);
-                          setSelection({
-                            offerId: currentOffer.id,
-                            label: `${cardTitle} ${currentOffer.hours}h`,
-                            hours: currentOffer.hours,
-                            mode: `${n}x`,
-                            firstPayment: per,
-                            schedule: n === 2 ? 'Aujourd’hui / J+30' : (n === 3 ? 'Aujourd’hui / J+30 / J+60' : 'Échéances mensuelles'),
-                          });
-                          setStep(3);
-                        }}
-                        className="w-full rounded-2xl bg-white border border-[#DAD7FF] px-4 py-4 flex items-center justify-between"
-                        style={{color:'#463CFF'}}
-                      >
-                        <div className="flex items-center gap-3">
-                          <CreditCard/>
-                          <span className="font-medium">CB {n}×</span>
-                          <span className="mx-2">-</span>
-                          <div className="leading-tight">
-                            <div className="font-semibold">{formatPrice(perCycleAmount(currentOffer, n), true)} €</div>
-                            <div className="text-sm opacity-90">total {formatPrice(currentOffer.installments.total)} €</div>
+                    {currentOffer.allowedCycles
+                      ?.slice()
+                      .sort()
+                      .map((n) => (
+                        <button
+                          key={n}
+                          onClick={() => {
+                            const per = perCycleAmount(currentOffer, n);
+                            setSelection({
+                              offerId: currentOffer.id,
+                              label: `${cardTitle} ${currentOffer.hours}h`,
+                              hours: currentOffer.hours,
+                              mode: `${n}x`,
+                              firstPayment: per,
+                              schedule:
+                                n === 2 ? 'Aujourd’hui / J+30' : n === 3 ? 'Aujourd’hui / J+30 / J+60' : 'Échéances mensuelles',
+                            });
+                            setStep(3);
+                          }}
+                          className="w-full rounded-2xl bg-white border border-[#DAD7FF] px-4 py-4 flex items-center justify-between"
+                          style={{ color: '#463CFF' }}
+                        >
+                          <div className="flex items-center gap-3">
+                            <CreditCard />
+                            <span className="font-medium">CB {n}×</span>
+                            <span className="mx-2">-</span>
+                            <div className="leading-tight">
+                              <div className="font-semibold">{formatPrice(perCycleAmount(currentOffer, n), true)} €</div>
+                              <div className="text-sm opacity-90">total {formatPrice(currentOffer.installments.total)} €</div>
+                            </div>
                           </div>
-                        </div>
-                        <span className="font-semibold">→</span>
-                      </button>
-                    ))}
+                          <span className="font-semibold">→</span>
+                        </button>
+                      ))}
                   </div>
 
-                  <p className="text-sm" style={{color:'#463CFF'}}>
-                    Après votre inscription en ligne, vous êtes rapidement contacté par un de nos conseillers pour commencer votre formation. Vous pouvez choisir aussi l&apos;inscription en agence.
+                  <p className="text-sm" style={{ color: '#463CFF' }}>
+                    Après votre inscription en ligne, vous êtes rapidement contacté par un de nos conseillers pour commencer votre
+                    formation. Vous pouvez choisir aussi l&apos;inscription en agence.
                   </p>
                 </div>
               )}
             </div>
 
             {/* RDV */}
-            <div className="mx-auto pt-4 w-full" style={{maxWidth:'720px'}}>{InscriptionBouton}</div>
+            <div className="mx-auto pt-4 w-full" style={{ maxWidth: '720px' }}>
+              {InscriptionBouton}
+            </div>
           </section>
         )}
 
@@ -586,31 +648,27 @@ const saveLeadAndGo = async (lead) => {
         {step === 3 && (
           <section className="space-y-6">
             <h2 className="text-2xl font-bold">Paiement</h2>
-            <div className="mx-auto rounded-3xl border p-5 grid gap-3" style={{maxWidth:'720px'}}>
+            <div className="mx-auto rounded-3xl border p-5 grid gap-3" style={{ maxWidth: '720px' }}>
               <div className="text-sm">Sélection :</div>
               <div className="text-lg font-semibold">
                 {selection.label} — Paiement {selection.mode}
               </div>
               <div className="text-sm">
-                1er versement aujourd’hui :{' '}
-                <span className="font-semibold">
-                  {selection.firstPayment?.toLocaleString('fr-FR')} €
-                </span>
+                1er versement aujourd’hui : <span className="font-semibold">{selection.firstPayment?.toLocaleString('fr-FR')} €</span>
               </div>
               <div className="text-sm text-gray-600">Échéancier : {selection.schedule}</div>
 
-              <PrimaryButton onClick={handleCheckout}>
-                Continuer vers le paiement sécurisé (Stripe Checkout)
-              </PrimaryButton>
+              <PrimaryButton onClick={handleCheckout}>Continuer vers le paiement sécurisé (Stripe Checkout)</PrimaryButton>
 
               <p className="text-sm text-gray-600">
-                Après votre inscription en ligne, vous serez rapidement contacté par un de nos conseillers pour commencer votre formation. Vous pouvez choisir aussi l&apos;inscription en agence.
+                Après votre inscription en ligne, vous serez rapidement contacté par un de nos conseillers pour commencer votre
+                formation. Vous pouvez choisir aussi l&apos;inscription en agence.
               </p>
 
               <p className="text-xs text-gray-600">CB 3-D Secure • Apple Pay / Google Pay • Données protégées</p>
             </div>
 
-            <div className="grid grid-cols-1 gap-3 mx-auto" style={{maxWidth:'720px'}}>
+            <div className="grid grid-cols-1 gap-3 mx-auto" style={{ maxWidth: '720px' }}>
               <OutlineButton onClick={() => setStep(2)}>Modifier mon choix</OutlineButton>
               {InscriptionBouton}
             </div>
@@ -618,18 +676,16 @@ const saveLeadAndGo = async (lead) => {
         )}
       </main>
 
-      {/* ✅ on utilise la vraie modale des components (icônes + bouton “Appeler”) */}
+      {/* Modale offre */}
       <OfferModal
         open={!!modalOffer}
         onClose={() => setModalOffer(null)}
         title={modalOffer ? `${cardTitle} ${modalOffer.hours}h` : ''}
-
         summary={modalOffer ? PACK_CONTENT[modalOffer.id]?.summary : ''}
         included={modalOffer ? PACK_CONTENT[modalOffer.id]?.included || [] : []}
         conditions={modalOffer ? PACK_CONTENT[modalOffer.id]?.conditions || [] : []}
         excluded={modalOffer ? PACK_CONTENT[modalOffer.id]?.excluded || [] : []}
         bullets={modalOffer ? modalOffer.perks : []}
-
         disclaimer={modalOffer ? PACK_CONTENT[modalOffer.id]?.disclaimer : ''}
         phone="0465848325"
       />
