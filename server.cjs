@@ -7,7 +7,7 @@ const Stripe = require('stripe');
 const app = express();
 
 // --- CONFIG ---
-const FRONT = process.env.FRONT_URL || 'https://inscription-en-ligne-getdryv-1.onrender.com/';
+const FRONT = process.env.FRONT_URL || 'https://inscription-en-ligne-getdryv-1.onrender.com';
 const PORT = process.env.PORT || 4242;
 const WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || null;
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
@@ -172,6 +172,6 @@ app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), (req, re
 
 // --- START ---
 app.listen(PORT, () => {
-  console.log(`✅ API Stripe sur https://inscription-en-ligne-getdryv-1.onrender.com/:${PORT}`);
+  console.log(`✅ API Stripe sur https://inscription-en-ligne-getdryv-1.onrender.com:${PORT}`);
   if (!WEBHOOK_SECRET) console.log('ℹ️ STRIPE_WEBHOOK_SECRET non défini (OK en DEV)');
 });
