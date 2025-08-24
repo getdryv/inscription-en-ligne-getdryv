@@ -15,8 +15,10 @@ const FRONT = (process.env.FRONT_URL || 'https://inscription-en-ligne-getdryv-1.
 const PORT = process.env.PORT || 4242;
 const WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || null;
 
-// 🔧 Réseau: privilégier IPv4 (évite soucis IPv6 → api.stripe.com)
+// Favoriser IPv4 globalement (si Node < option env)
 if (dns.setDefaultResultOrder) dns.setDefaultResultOrder('ipv4first');
+
+// Agent HTTPS forcé IPv4 pour Stripe
 const agent = new https.Agent({
   keepAlive: true,
   lookup: (hostname, options, cb) => require('dns').lookup(hostname, { family: 4 }, cb),
@@ -29,7 +31,7 @@ if (!process.env.STRIPE_SECRET_KEY) {
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
   apiVersion: '2024-06-20',
   httpClient: Stripe.createNodeHttpClient(agent),
-  maxNetworkRetries: 0,   // pas d’auto-retry → log de l’erreur réelle
+  maxNetworkRetries: 0,
   timeout: 20000,
 });
 
@@ -43,10 +45,10 @@ const logStripeErr = (e, ctx) => {
   });
 };
 
-// CORS (souple)
+// CORS
 app.use(cors());
 
-// --- Webhook AVANT le body-parser JSON ---
+// Webhook AVANT body-parser
 app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), (req, res) => {
   let event = req.body;
   const sig = req.headers['stripe-signature'];
@@ -58,7 +60,6 @@ app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), (req, re
     console.error('Webhook signature error:', err.message);
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
-
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object;
     const cycles = Number(session.metadata?.cycles || 0);
@@ -72,17 +73,16 @@ app.post('/webhooks/stripe', express.raw({ type: 'application/json' }), (req, re
       }).catch(console.error);
     }
   }
-
   res.json({ received: true });
 });
 
-// Body parser JSON pour le reste
+// Body parser JSON
 app.use(express.json());
 
-// --- SANITY ---
+// Health
 app.get('/api/health', (_req, res) => res.json({ ok: true, node: process.version, front: FRONT }));
 
-// --- DIAG connectivité ---
+// Diag connectivité
 app.get('/api/_diag', async (_req, res) => {
   try {
     const resolves = await dnsPromises.lookup('api.stripe.com', { all: true });
@@ -100,7 +100,7 @@ app.get('/api/_diag', async (_req, res) => {
   }
 });
 
-// --- CHECKOUT 1x ---
+// --- CREATE CHECKOUT (1x) ---
 app.post('/api/create-checkout-session', async (req, res) => {
   try {
     const { offerId, mode, firstName = '', lastName = '', phone = '', promoCode = '' } = req.body;
@@ -116,16 +116,10 @@ app.post('/api/create-checkout-session', async (req, res) => {
     if (!offer) return res.status(400).json({ error: 'Offre inconnue' });
     if (mode !== '1x') return res.status(400).json({ error: 'Utilise /api/create-installments-session pour le paiement en plusieurs fois' });
 
-    console.log('[1x] offerId=', offerId, 'amount1x=', offer.amount1x);
-
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
       line_items: [{
-        price_data: {
-          currency: 'eur',
-          unit_amount: offer.amount1x,
-          product_data: { name: offer.label },
-        },
+        price_data: { currency: 'eur', unit_amount: OFFERS[offerId].amount1x, product_data: { name: OFFERS[offerId].label } },
         quantity: 1,
       }],
       payment_method_types: ['card'],
@@ -143,11 +137,10 @@ app.post('/api/create-checkout-session', async (req, res) => {
   }
 });
 
-// --- INSTALLMENTS (2x/3x/4x) ---
+// --- INSTALLMENTS ---
 app.post('/api/create-installments-session', async (req, res) => {
   try {
     const { offerId, cycles = 3, firstName = '', lastName = '', phone = '' } = req.body;
-
     const OFFERS = {
       'classique-10h': { label: 'Permis 10 heures', amountTotal:  69900 },
       'classique-20h': { label: 'Permis 20 heures', amountTotal: 109900 },
@@ -162,17 +155,11 @@ app.post('/api/create-installments-session', async (req, res) => {
     if (![2,3,4].includes(n)) return res.status(400).json({ error: 'cycles doit être 2, 3 ou 4' });
 
     const perCycle = Math.floor(offer.amountTotal / n);
-    console.log('[nx] offerId=', offerId, 'cycles=', n, 'perCycle=', perCycle, 'total=', offer.amountTotal);
 
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
       line_items: [{
-        price_data: {
-          currency: 'eur',
-          recurring: { interval: 'month' },
-          unit_amount: perCycle,
-          product_data: { name: `${offer.label} — ${n}x` },
-        },
+        price_data: { currency: 'eur', recurring: { interval: 'month' }, unit_amount: perCycle, product_data: { name: `${offer.label} — ${n}x` } },
         quantity: 1,
       }],
       payment_method_types: ['card'],
@@ -188,16 +175,6 @@ app.post('/api/create-installments-session', async (req, res) => {
     logStripeErr(e, 'create-installments-session');
     res.status(500).json({ error: e?.raw?.message || e.message || 'Erreur interne du serveur' });
   }
-});
-
-// --- GET session ---
-app.get('/api/checkout-session/:id', async (req, res) => {
-  try {
-    const session = await stripe.checkout.sessions.retrieve(req.params.id, {
-      expand: ['payment_intent', 'subscription'],
-    });
-    res.json(session);
-  } catch (e) { res.status(400).json({ error: e?.raw?.message || e.message }); }
 });
 
 // --- START ---
