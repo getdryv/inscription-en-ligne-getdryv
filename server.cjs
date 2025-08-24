@@ -7,7 +7,7 @@ const Stripe = require('stripe');
 const app = express();
 
 // --- CONFIG ---
-const FRONT = process.env.FRONT_URL || 'https://inscription-en-ligne-getdryv.onrender.com';
+const FRONT = process.env.FRONT_URL || 'https://inscription-en-ligne-getdryv-1.onrender.com/';
 const PORT = process.env.PORT || 4242;
 const WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || null;
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
